@@ -1,28 +1,32 @@
 package cotuba;
 
+import cotuba.clis.Cli;
+import cotuba.generators.EpubGenerator;
+import cotuba.generators.PdfGenerator;
+
 import java.nio.file.Path;
 
 public class Main {
 
     public static void main(String[] args) {
 
-        LeitorOpcoesCLI leitorOpcoesCLI = new LeitorOpcoesCLI(args);
-        Path mdsDirectory = leitorOpcoesCLI.getMdsDirectory();
-        String ebookFormat = leitorOpcoesCLI.getEbookFormat();
-        Path outputFile = leitorOpcoesCLI.getOutputFile();
-        boolean verbose = leitorOpcoesCLI.isVerbose();
+        Cli cli = new Cli(args);
+        Path mdsDirectory = cli.getMdsDirectory();
+        String ebookFormat = cli.getEbookFormat();
+        Path outputPath = cli.getOutputPath();
+        boolean verbose = cli.isVerbose();
 
         try {
             if ("pdf".equals(ebookFormat)) {
-                GeradorPDF geradorPDF = new GeradorPDF();
-                geradorPDF.generate(mdsDirectory, outputFile);
+                PdfGenerator pdfGenerator = new PdfGenerator();
+                pdfGenerator.generate(outputPath, mdsDirectory);
             } else if ("epub".equals(ebookFormat)) {
-                GeradorEPUB geradorEPUB = new GeradorEPUB();
-                geradorEPUB.generate(mdsDirectory, outputFile);
+                EpubGenerator epubGenerator = new EpubGenerator();
+                epubGenerator.generate(outputPath, mdsDirectory);
             } else {
                 throw new RuntimeException("ebookFormat do ebook inválido: " + ebookFormat);
             }
-            System.out.println("Arquivo gerado com sucesso: " + outputFile);
+            System.out.println("Arquivo gerado com sucesso: " + outputPath);
         } catch (Exception ex) {
             System.err.println(ex.getMessage());
             if (verbose) {
