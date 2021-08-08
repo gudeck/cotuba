@@ -1,11 +1,5 @@
 *.pdf
 *.epub
-target
-.classpath
-.project
-.settings
-.build/
-
 
 # Created by https://www.toptal.com/developers/gitignore/api/intellij+all,maven
 # Edit at https://www.toptal.com/developers/gitignore?templates=intellij+all,maven
