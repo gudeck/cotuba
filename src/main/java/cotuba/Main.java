@@ -1,28 +1,5 @@
 package cotuba;
 
-import java.io.IOException;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.PathMatcher;
-import java.nio.file.Paths;
-import java.util.List;
-import java.util.stream.Stream;
-
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.DefaultParser;
-import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.Option;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
-import org.commonmark.node.AbstractVisitor;
-import org.commonmark.node.Heading;
-import org.commonmark.node.Node;
-import org.commonmark.node.Text;
-import org.commonmark.parser.Parser;
-import org.commonmark.renderer.html.HtmlRenderer;
-
 import com.itextpdf.html2pdf.HtmlConverter;
 import com.itextpdf.kernel.pdf.PdfDocument;
 import com.itextpdf.kernel.pdf.PdfWriter;
@@ -31,212 +8,164 @@ import com.itextpdf.layout.element.AreaBreak;
 import com.itextpdf.layout.element.IBlockElement;
 import com.itextpdf.layout.element.IElement;
 import com.itextpdf.layout.property.AreaBreakType;
-
 import nl.siegmann.epublib.domain.Book;
 import nl.siegmann.epublib.domain.Resource;
 import nl.siegmann.epublib.epub.EpubWriter;
 import nl.siegmann.epublib.service.MediatypeService;
+import org.commonmark.node.AbstractVisitor;
+import org.commonmark.node.Heading;
+import org.commonmark.node.Node;
+import org.commonmark.node.Text;
+import org.commonmark.parser.Parser;
+import org.commonmark.renderer.html.HtmlRenderer;
+
+import java.io.IOException;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.PathMatcher;
+import java.util.List;
+import java.util.stream.Stream;
 
 public class Main {
 
-	public static void main(String[] args) {
-		Options options = new Options();
+    public static void main(String[] args) {
 
-		Option opcaoDeDiretorioDosMD = new Option("d", "dir", true,
-				"Diretório que contem os arquivos md. Default: diretório atual.");
-		options.addOption(opcaoDeDiretorioDosMD);
+        LeitorOpcoesCLI leitorOpcoesCLI = new LeitorOpcoesCLI(args);
+        Path mdsDirectory = leitorOpcoesCLI.getMdsDirectory();
+        String ebookFormat = leitorOpcoesCLI.getEbookFormat();
+        Path outputFile = leitorOpcoesCLI.getOutputFile();
+        boolean verbose = leitorOpcoesCLI.isVerbose();
 
-		Option opcaoDeFormatoDoEbook = new Option("f", "format", true,
-				"Formato de saída do ebook. Pode ser: pdf ou epub. Default: pdf");
-		options.addOption(opcaoDeFormatoDoEbook);
+        try {
 
-		Option opcaoDeArquivoDeSaida = new Option("o", "output", true,
-				"Arquivo de saída do ebook. Default: book.{formato}.");
-		options.addOption(opcaoDeArquivoDeSaida);
+            if ("pdf".equals(ebookFormat)) {
+                try (PdfWriter writer = new PdfWriter(Files.newOutputStream(outputFile));
+                     PdfDocument pdf = new PdfDocument(writer);
+                     Document pdfDocument = new Document(pdf)) {
 
-		Option opcaoModoVerboso = new Option("v", "verbose", false,
-				"Habilita modo verboso.");
-		options.addOption(opcaoModoVerboso);
-		
-		CommandLineParser cmdParser = new DefaultParser();
-		HelpFormatter ajuda = new HelpFormatter();
-		CommandLine cmd;
+                    PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/*.md");
+                    try (Stream<Path> arquivosMD = Files.list(mdsDirectory)) {
+                        arquivosMD
+                                .filter(matcher::matches)
+                                .sorted()
+                                .forEach(arquivoMD -> {
+                                    Parser parser = Parser.builder().build();
+                                    Node document = null;
+                                    try {
+                                        document = parser.parseReader(Files.newBufferedReader(arquivoMD));
+                                        document.accept(new AbstractVisitor() {
+                                            @Override
+                                            public void visit(Heading heading) {
+                                                if (heading.getLevel() == 1) {
+                                                    // capítulo
+                                                    String tituloDoCapitulo = ((Text) heading.getFirstChild()).getLiteral();
+                                                    // TODO: usar título do capítulo
+                                                } else if (heading.getLevel() == 2) {
+                                                    // seção
+                                                } else if (heading.getLevel() == 3) {
+                                                    // título
+                                                }
+                                            }
 
-		try {
-			cmd = cmdParser.parse(options, args);
-		} catch (ParseException e) {
-			System.err.println(e.getMessage());
-			ajuda.printHelp("cotuba", options);
-			System.exit(1);
-			return;
-		}
+                                        });
+                                    } catch (Exception ex) {
+                                        throw new RuntimeException("Erro ao fazer parse do arquivo " + arquivoMD, ex);
+                                    }
 
-		Path diretorioDosMD;
-		String formato;
-		Path arquivoDeSaida;
-		boolean modoVerboso = false;
+                                    try {
+                                        HtmlRenderer renderer = HtmlRenderer.builder().build();
+                                        String html = renderer.render(document);
 
-		try {
+                                        List<IElement> convertToElements = HtmlConverter.convertToElements(html);
+                                        for (IElement element : convertToElements) {
+                                            pdfDocument.add((IBlockElement) element);
+                                        }
+                                        // TODO: não adicionar página depois do último capítulo
+                                        pdfDocument.add(new AreaBreak(AreaBreakType.NEXT_PAGE));
 
-			String nomeDoDiretorioDosMD = cmd.getOptionValue("dir");
+                                    } catch (Exception ex) {
+                                        throw new RuntimeException("Erro ao renderizar para HTML o arquivo " + arquivoMD, ex);
+                                    }
 
-			if (nomeDoDiretorioDosMD != null) {
-				diretorioDosMD = Paths.get(nomeDoDiretorioDosMD);
-				if (!Files.isDirectory(diretorioDosMD)) {
-					throw new RuntimeException(nomeDoDiretorioDosMD + " não é um diretório.");
-				}
-			} else {
-				Path diretorioAtual = Paths.get("");
-				diretorioDosMD = diretorioAtual;
-			}
+                                });
+                    } catch (IOException ex) {
+                        throw new RuntimeException(
+                                "Erro tentando encontrar arquivos .md em " + mdsDirectory.toAbsolutePath(), ex);
+                    }
 
-			String nomeDoFormatoDoEbook = cmd.getOptionValue("format");
+                } catch (Exception ex) {
+                    throw new RuntimeException("Erro ao criar arquivo PDF: " + outputFile.toAbsolutePath(), ex);
+                }
 
-			if (nomeDoFormatoDoEbook != null) {
-				formato = nomeDoFormatoDoEbook.toLowerCase();
-			} else {
-				formato = "pdf";
-			}
+            } else if ("epub".equals(ebookFormat)) {
+                Book epub = new Book();
 
-			String nomeDoArquivoDeSaidaDoEbook = cmd.getOptionValue("output");
-			if (nomeDoArquivoDeSaidaDoEbook != null) {
-				arquivoDeSaida = Paths.get(nomeDoArquivoDeSaidaDoEbook);
-				if (Files.exists(arquivoDeSaida) && Files.isDirectory(arquivoDeSaida)) {
-					throw new RuntimeException(nomeDoArquivoDeSaidaDoEbook + " é um diretório.");
-				}
-			} else {
-				arquivoDeSaida = Paths.get("book." + formato.toLowerCase());
-			}
+                PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/*.md");
+                try (Stream<Path> arquivosMD = Files.list(mdsDirectory)) {
+                    arquivosMD
+                            .filter(matcher::matches)
+                            .sorted()
+                            .forEach(arquivoMD -> {
+                                Parser parser = Parser.builder().build();
+                                Node document = null;
+                                try {
+                                    document = parser.parseReader(Files.newBufferedReader(arquivoMD));
+                                    document.accept(new AbstractVisitor() {
+                                        @Override
+                                        public void visit(Heading heading) {
+                                            if (heading.getLevel() == 1) {
+                                                // capítulo
+                                                String tituloDoCapitulo = ((Text) heading.getFirstChild()).getLiteral();
+                                                // TODO: usar título do capítulo
+                                            } else if (heading.getLevel() == 2) {
+                                                // seção
+                                            } else if (heading.getLevel() == 3) {
+                                                // título
+                                            }
+                                        }
 
-			modoVerboso = cmd.hasOption("verbose");
-			
-			if ("pdf".equals(formato)) {
-				try(PdfWriter writer = new PdfWriter(Files.newOutputStream(arquivoDeSaida));
-					PdfDocument pdf = new PdfDocument(writer);
-					Document pdfDocument = new Document(pdf)) {
+                                    });
+                                } catch (Exception ex) {
+                                    throw new RuntimeException("Erro ao fazer parse do arquivo " + arquivoMD, ex);
+                                }
 
-					PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/*.md");
-					try (Stream<Path> arquivosMD = Files.list(diretorioDosMD)) {
-						arquivosMD
-							.filter(matcher::matches)
-							.sorted()
-							.forEach(arquivoMD -> {
-								Parser parser = Parser.builder().build();
-								Node document = null;
-								try {
-									document = parser.parseReader(Files.newBufferedReader(arquivoMD));
-									document.accept(new AbstractVisitor() {
-										@Override
-										public void visit(Heading heading) {
-											if (heading.getLevel() == 1) {
-												// capítulo
-												String tituloDoCapitulo = ((Text) heading.getFirstChild()).getLiteral();
-												// TODO: usar título do capítulo
-											} else if (heading.getLevel() == 2) {
-												// seção
-											} else if (heading.getLevel() == 3) {
-												// título
-											}
-										}
+                                try {
+                                    HtmlRenderer renderer = HtmlRenderer.builder().build();
+                                    String html = renderer.render(document);
 
-									});
-								} catch (Exception ex) {
-									throw new RuntimeException("Erro ao fazer parse do arquivo " + arquivoMD, ex);
-								}
+                                    // TODO: usar título do capítulo
+                                    epub.addSection("Capítulo", new Resource(html.getBytes(), MediatypeService.XHTML));
 
-								try {
-									HtmlRenderer renderer = HtmlRenderer.builder().build();
-									String html = renderer.render(document);
+                                } catch (Exception ex) {
+                                    throw new RuntimeException("Erro ao renderizar para HTML o arquivo " + arquivoMD, ex);
+                                }
+                            });
+                } catch (IOException ex) {
+                    throw new RuntimeException(
+                            "Erro tentando encontrar arquivos .md em " + mdsDirectory.toAbsolutePath(), ex);
+                }
 
-									List<IElement> convertToElements = HtmlConverter.convertToElements(html);
-									for (IElement element : convertToElements) {
-										pdfDocument.add((IBlockElement) element);
-									}
-									// TODO: não adicionar página depois do último capítulo
-									pdfDocument.add(new AreaBreak(AreaBreakType.NEXT_PAGE));
+                EpubWriter epubWriter = new EpubWriter();
 
-								} catch (Exception ex) {
-									throw new RuntimeException("Erro ao renderizar para HTML o arquivo " + arquivoMD, ex);
-								}
+                try {
+                    epubWriter.write(epub, Files.newOutputStream(outputFile));
+                } catch (IOException ex) {
+                    throw new RuntimeException("Erro ao criar arquivo EPUB: " + outputFile.toAbsolutePath(), ex);
+                }
+            } else {
+                throw new RuntimeException("ebookFormat do ebook inválido: " + ebookFormat);
+            }
 
-							});
-					} catch (IOException ex) {
-						throw new RuntimeException(
-								"Erro tentando encontrar arquivos .md em " + diretorioDosMD.toAbsolutePath(), ex);
-					}
+            System.out.println("Arquivo gerado com sucesso: " + outputFile);
 
-				} catch (Exception ex) {
-					throw new RuntimeException("Erro ao criar arquivo PDF: " + arquivoDeSaida.toAbsolutePath(), ex);
-				}
-
-			} else if ("epub".equals(formato)) {
-				Book epub = new Book();
-
-				PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/*.md");
-				try (Stream<Path> arquivosMD = Files.list(diretorioDosMD)) {
-					arquivosMD
-						.filter(matcher::matches)
-						.sorted()
-						.forEach(arquivoMD -> {
-							Parser parser = Parser.builder().build();
-							Node document = null;
-							try {
-								document = parser.parseReader(Files.newBufferedReader(arquivoMD));
-								document.accept(new AbstractVisitor() {
-									@Override
-									public void visit(Heading heading) {
-										if (heading.getLevel() == 1) {
-											// capítulo
-											String tituloDoCapitulo = ((Text) heading.getFirstChild()).getLiteral();
-											// TODO: usar título do capítulo
-										} else if (heading.getLevel() == 2) {
-											// seção
-										} else if (heading.getLevel() == 3) {
-											// título
-										}
-									}
-
-								});
-							} catch (Exception ex) {
-								throw new RuntimeException("Erro ao fazer parse do arquivo " + arquivoMD, ex);
-							}
-
-							try {
-								HtmlRenderer renderer = HtmlRenderer.builder().build();
-								String html = renderer.render(document);
-
-								// TODO: usar título do capítulo
-								epub.addSection("Capítulo", new Resource(html.getBytes(), MediatypeService.XHTML));
-
-							} catch (Exception ex) {
-								throw new RuntimeException("Erro ao renderizar para HTML o arquivo " + arquivoMD, ex);
-							}
-						});
-				} catch (IOException ex) {
-					throw new RuntimeException(
-							"Erro tentando encontrar arquivos .md em " + diretorioDosMD.toAbsolutePath(), ex);
-				}
-
-				EpubWriter epubWriter = new EpubWriter();
-
-				try {
-					epubWriter.write(epub, Files.newOutputStream(arquivoDeSaida));
-				} catch (IOException ex) {
-					throw new RuntimeException("Erro ao criar arquivo EPUB: " + arquivoDeSaida.toAbsolutePath(), ex);
-				}
-			} else {
-				throw new RuntimeException("Formato do ebook inválido: " + formato);
-			}
-
-			System.out.println("Arquivo gerado com sucesso: " + arquivoDeSaida);
-
-		} catch (Exception ex) {
-			System.err.println(ex.getMessage());
-			if (modoVerboso) {
-				ex.printStackTrace();
-			}
-			System.exit(1);
-		}
-	}
+        } catch (Exception ex) {
+            System.err.println(ex.getMessage());
+            if (verbose) {
+                ex.printStackTrace();
+            }
+            System.exit(1);
+        }
+    }
 
 }
